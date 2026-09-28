@@ -3,6 +3,7 @@
 ## Overview
 
 A mobile app that helps university students manage their sleep. Students set wake alarms and bedtime reminders, log when they sleep and wake, and receive yellow and red alerts when sleep debt builds. Three red alerts in a row notify a trusted contact. Collected data feeds a campus sleep research project.
+[Super Alarm Clock – UI Prototype](https://cs413-landon-super-alarm-clock.netlify.app/)
 
 Target stack for the course: Java, Apache Tapestry 5, Apache Cayenne ORM, Maven.
 
