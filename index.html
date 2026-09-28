@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Super Alarm Clock – UI Prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          bg: 'var(--bg)', surface: 'var(--surface)', raised: 'var(--raised)',
+          ink: 'var(--ink)', muted: 'var(--muted)', line: 'var(--line)',
+          moon: 'var(--moon)', yellow: 'var(--yellow)', red: 'var(--red)', rest: 'var(--rest)'
+        },
+        fontFamily: {
+          clock: ['"Instrument Serif"', 'Georgia', 'serif'],
+          sans: ['Manrope', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif']
+        }
+      }
+    }
+  }
+</script>
+<style>
+  :root {
+    --bg:#EEF0F7; --surface:#FFFFFF; --raised:#E3E6F2; --ink:#1E2240; --muted:#5E6385;
+    --line:#CFD3E6; --moon:#5B4FC4; --yellow:#B7860B; --red:#C2372F; --rest:#2F8A6B;
+    box-sizing:border-box;
+    padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:#181B33; --surface:#232845; --raised:#2E3458; --ink:#ECEAF6; --muted:#A3A2C3;
+      --line:#3A4068; --moon:#B7A6F2; --yellow:#E8B93A; --red:#EF6A5F; --rest:#6FCFA8;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:#181B33; --surface:#232845; --raised:#2E3458; --ink:#ECEAF6; --muted:#A3A2C3;
+    --line:#3A4068; --moon:#B7A6F2; --yellow:#E8B93A; --red:#EF6A5F; --rest:#6FCFA8;
+  }
+  html, body { height:100%; }
+  html { scroll-padding-top:env(safe-area-inset-top,0px); }
+  body { background:var(--bg); color:var(--ink); font-family:Manrope,system-ui,sans-serif; margin:0; }
+  *:focus-visible { outline:2px solid var(--moon); outline-offset:2px; }
+  .clock-num { font-variant-numeric: tabular-nums; letter-spacing:-0.02em; }
+  @media (prefers-reduced-motion: no-preference) {
+    .band { transition: background-color .5s ease, color .5s ease; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+
+<script type="text/babel">
+const { useState, useEffect, useMemo } = React;
+
+/* ---------- seed data: last 14 nights ---------- */
+const SEED_HOURS = [7.5, 6.8, 4.2, 3.9, 4.5, 7.9, 8.2, 6.1, 5.4, 7.2, 8.0, 7.6, 4.8, 5.1];
+const SEED_IGNORED = [0, 1, 2, 1, 2, 0, 0, 1, 1, 0, 0, 0, 2, 1];
+function seedNights() {
+  const today = new Date();
+  return SEED_HOURS.map((h, i) => {
+    const d = new Date(today);
+    d.setDate(today.getDate() - (SEED_HOURS.length - i));
+    return { date: d, hours: h, ignored: SEED_IGNORED[i], byAlarm: SEED_IGNORED[i] === 0 };
+  });
+}
+
+const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+const fmtTime = (d) => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+const fmtDay = (d) => d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+
+/* ---------- shared UI ---------- */
+function Toggle({ on, onChange, label }) {
+  return (
+    <button role="switch" aria-checked={on} aria-label={label} onClick={() => onChange(!on)}
+      className={`relative h-7 w-12 shrink-0 rounded-full border border-line ${on ? 'bg-moon' : 'bg-raised'}`}>
+      <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-surface ${on ? 'left-6' : 'left-0.5'}`} style={{transition:'left .15s'}}/>
+    </button>
+  );
+}
+
+function Section({ title, children, aside }) {
+  return (
+    <section className="mt-7">
+      <div className="mb-2 flex items-baseline justify-between">
+        <h2 className="text-[15px] font-semibold">{title}</h2>
+        {aside}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/* ---------- Tonight (home) ---------- */
+function Tonight({ now, alert, sleeping, lastSleep, onSleep, onWake, redStreak, contact, alarms, wakeResult }) {
+  const band = {
+    none:   { bg: 'bg-raised', text: 'text-ink', title: 'You’re rested', body: 'No sleep alerts right now.' },
+    yellow: { bg: 'bg-yellow', text: 'text-bg',  title: 'Yellow alert', body: 'You’ll need sleep soon. Start winding down within the next hour.' },
+    red:    { bg: 'bg-red',    text: 'text-bg',  title: 'Red alert', body: 'You need to sleep now. Your sleep debt is in the danger range.' },
+  }[alert];
+
+  const nextWake = alarms.filter(a => a.on && a.type === 'wake').sort((a,b) => a.time.localeCompare(b.time))[0];
+  const nextBed  = alarms.filter(a => a.on && a.type === 'bed').sort((a,b) => a.time.localeCompare(b.time))[0];
+
+  return (
+    <div>
+      <p className="text-sm text-muted">{now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}</p>
+      <p className="clock-num font-clock text-[92px] leading-none sm:text-[120px]" aria-live="off">
+        {now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(/\s?[AP]M/i, '')}
+        <span className="ml-2 align-top font-sans text-lg text-muted">{now.getHours() < 12 ? 'AM' : 'PM'}</span>
+      </p>
+
+      <div className={`band mt-5 rounded-2xl p-4 ${band.bg} ${band.text}`} role="status">
+        <p className="font-semibold">{band.title}</p>
+        <p className="mt-1 text-sm opacity-90">{band.body}</p>
+        {alert === 'red' && (
+          <p className="mt-2 text-sm font-semibold">Red alerts in a row: {redStreak} of 3</p>
+        )}
+      </div>
+
+      {redStreak >= 3 && (
+        <div className="mt-3 rounded-2xl border border-red p-4 text-sm">
+          <p className="font-semibold text-red">{contact.name || 'Your trusted contact'} was notified</p>
+          <p className="mt-1 text-muted">Three red alerts in a row triggered a check-in message. It resets after your next full night of sleep.</p>
+        </div>
+      )}
+
+      <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <button onClick={onSleep} disabled={sleeping}
+          className="rounded-2xl bg-moon px-5 py-4 text-left font-semibold text-bg disabled:opacity-40">
+          I’m going to sleep
+          <span className="block text-sm font-normal opacity-80">{sleeping ? `Asleep since ${fmtTime(lastSleep)}` : 'Starts tonight’s sleep record'}</span>
+        </button>
+        <button onClick={onWake} disabled={!sleeping}
+          className="rounded-2xl border border-line bg-surface px-5 py-4 text-left font-semibold disabled:opacity-40">
+          I’m awake
+          <span className="block text-sm font-normal text-muted">{sleeping ? 'Ends the sleep record' : 'Tap “going to sleep” first'}</span>
+        </button>
+      </div>
+
+      {wakeResult && (
+        <p className="mt-3 rounded-xl bg-raised p-3 text-sm">
+          Logged {wakeResult.hours.toFixed(1)} h of sleep. {wakeResult.byAlarm ? 'Woken by your alarm.' : 'Woke up on your own.'}
+        </p>
+      )}
+
+      <Section title="Coming up">
+        <div className="divide-y divide-line rounded-2xl border border-line bg-surface">
+          <div className="flex justify-between p-4 text-sm"><span className="text-muted">Bedtime reminder</span><span className="font-semibold">{nextBed ? nextBed.time : 'Not set'}</span></div>
+          <div className="flex justify-between p-4 text-sm"><span className="text-muted">Wake alarm</span><span className="font-semibold">{nextWake ? nextWake.time : 'Not set'}</span></div>
+        </div>
+      </Section>
+    </div>
+  );
+}
+
+/* ---------- Alarms ---------- */
+function Alarms({ alarms, setAlarms }) {
+  const [type, setType] = useState('wake');
+  const [time, setTime] = useState('07:30');
+  const [days, setDays] = useState(['Mon','Tue','Wed','Thu','Fri']);
+
+  const add = () => {
+    setAlarms([...alarms, { id: Date.now(), type, time, days, on: true }]);
+  };
+  const toggleDay = (d) => setDays(days.includes(d) ? days.filter(x => x !== d) : [...days, d]);
+
+  const group = (t, title) => {
+    const list = alarms.filter(a => a.type === t);
+    return (
+      <Section title={title}>
+        {list.length === 0 ? (
+          <p className="rounded-2xl border border-dashed border-line p-4 text-sm text-muted">None yet. Add one below.</p>
+        ) : (
+          <ul className="divide-y divide-line rounded-2xl border border-line bg-surface">
+            {list.map(a => (
+              <li key={a.id} className="flex items-center gap-3 p-4">
+                <div className="flex-1">
+                  <p className={`clock-num font-clock text-4xl leading-none ${a.on ? '' : 'text-muted'}`}>{a.time}</p>
+                  <p className="mt-1 text-xs text-muted">{a.days.length === 7 ? 'Every day' : a.days.join(', ') || 'Once'}</p>
+                </div>
+                <Toggle on={a.on} label={`Turn ${title.toLowerCase()} at ${a.time} ${a.on ? 'off' : 'on'}`}
+                  onChange={(v) => setAlarms(alarms.map(x => x.id === a.id ? { ...x, on: v } : x))}/>
+                <button onClick={() => setAlarms(alarms.filter(x => x.id !== a.id))}
+                  className="rounded-lg px-2 py-1 text-sm text-muted hover:text-red" aria-label={`Delete alarm at ${a.time}`}>Delete</button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+    );
+  };
+
+  return (
+    <div>
+      <h1 className="font-clock text-5xl">Alarms</h1>
+      {group('wake', 'Wake alarms')}
+      {group('bed', 'Bedtime reminders')}
+
+      <Section title="Add an alarm">
+        <div className="rounded-2xl border border-line bg-surface p-4">
+          <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Alarm type">
+            {[['wake','Wake me up'],['bed','Remind me to sleep']].map(([v,l]) => (
+              <button key={v} role="radio" aria-checked={type===v} onClick={() => setType(v)}
+                className={`rounded-xl px-3 py-2 text-sm font-semibold ${type===v ? 'bg-moon text-bg' : 'bg-raised'}`}>{l}</button>
+            ))}
+          </div>
+          <label className="mt-4 block text-sm text-muted" htmlFor="alarm-time">Time</label>
+          <input id="alarm-time" type="time" value={time} onChange={e => setTime(e.target.value)}
+            className="clock-num mt-1 w-full rounded-xl border border-line bg-raised px-3 py-2 font-clock text-3xl text-ink"/>
+          <p className="mt-4 text-sm text-muted">Repeat on</p>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {DAYS.map(d => (
+              <button key={d} onClick={() => toggleDay(d)} aria-pressed={days.includes(d)}
+                className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold ${days.includes(d) ? 'bg-ink text-bg' : 'bg-raised text-muted'}`}>{d}</button>
+            ))}
+          </div>
+          <button onClick={add} className="mt-5 w-full rounded-xl bg-moon py-3 font-semibold text-bg">Add alarm</button>
+        </div>
+      </Section>
+    </div>
+  );
+}
+
+/* ---------- Patterns (reports) ---------- */
+function findClusters(nights, test, min = 3) {
+  const out = []; let run = [];
+  nights.forEach((n, i) => {
+    if (test(n)) run.push(i);
+    else { if (run.length >= min) out.push(run); run = []; }
+  });
+  if (run.length >= min) out.push(run);
+  return out;
+}
+
+function Patterns({ nights, goal }) {
+  const avg = nights.reduce((s, n) => s + n.hours, 0) / nights.length;
+  const totalAlarms = nights.length + nights.reduce((s, n) => s + n.ignored, 0);
+  const ignored = nights.reduce((s, n) => s + n.ignored, 0);
+  const debt = nights.slice(-7).reduce((s, n) => s + Math.max(0, goal - n.hours), 0);
+  const danger = findClusters(nights, n => n.hours < 5);
+  const good = findClusters(nights, n => n.hours >= goal - 0.5);
+  const max = 10;
+  const colorFor = (h) => h < 5 ? 'bg-red' : h < goal - 0.5 ? 'bg-yellow' : 'bg-rest';
+
+  return (
+    <div>
+      <h1 className="font-clock text-5xl">Patterns</h1>
+      <p className="mt-1 text-sm text-muted">Your last {nights.length} nights</p>
+
+      <dl className="mt-5 grid grid-cols-3 gap-2">
+        <div className="rounded-2xl bg-surface p-3 border border-line"><dt className="text-xs text-muted">Average sleep</dt><dd className="clock-num font-clock text-3xl">{avg.toFixed(1)}<span className="font-sans text-sm text-muted"> h</span></dd></div>
+        <div className="rounded-2xl bg-surface p-3 border border-line"><dt className="text-xs text-muted">Alarms ignored</dt><dd className="clock-num font-clock text-3xl">{ignored}<span className="font-sans text-sm text-muted"> of {totalAlarms}</span></dd></div>
+        <div className="rounded-2xl bg-surface p-3 border border-line"><dt className="text-xs text-muted">Debt this week</dt><dd className="clock-num font-clock text-3xl">{debt.toFixed(1)}<span className="font-sans text-sm text-muted"> h</span></dd></div>
+      </dl>
+
+      <Section title="Hours slept" aside={<span className="text-xs text-muted">Goal {goal} h</span>}>
+        <div className="rounded-2xl border border-line bg-surface p-4">
+          <div className="relative flex h-44 items-end gap-1.5" role="img" aria-label="Bar chart of hours slept per night">
+            <div className="pointer-events-none absolute inset-x-0 border-t border-dashed border-muted" style={{ bottom: `${(goal / max) * 100}%` }}/>
+            {nights.map((n, i) => (
+              <div key={i} className="flex h-full flex-1 flex-col justify-end" title={`${fmtDay(n.date)}: ${n.hours} h, ${n.ignored} alarms ignored`}>
+                <div className={`w-full rounded-t-md ${colorFor(n.hours)}`} style={{ height: `${(n.hours / max) * 100}%` }}/>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 flex justify-between text-[11px] text-muted">
+            <span>{fmtDay(nights[0].date)}</span><span>{fmtDay(nights[nights.length - 1].date)}</span>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-4 text-xs text-muted">
+            <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-sm bg-rest"/>Near goal</span>
+            <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-sm bg-yellow"/>Short</span>
+            <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-sm bg-red"/>Under 5 h</span>
+          </div>
+        </div>
+      </Section>
+
+      <Section title="Streaks we noticed">
+        <ul className="space-y-2">
+          {danger.map((c, i) => (
+            <li key={'d'+i} className="rounded-2xl border-l-4 border-red bg-surface p-4 text-sm">
+              <p className="font-semibold">{c.length} short nights in a row</p>
+              <p className="text-muted">{fmtDay(nights[c[0]].date)} to {fmtDay(nights[c[c.length-1]].date)}. You ignored {c.reduce((s,j)=>s+nights[j].ignored,0)} alarms in this stretch.</p>
+            </li>
+          ))}
+          {good.map((c, i) => (
+            <li key={'g'+i} className="rounded-2xl border-l-4 border-rest bg-surface p-4 text-sm">
+              <p className="font-semibold">{c.length} good nights in a row</p>
+              <p className="text-muted">{fmtDay(nights[c[0]].date)} to {fmtDay(nights[c[c.length-1]].date)}. Keep this bedtime.</p>
+            </li>
+          ))}
+          {danger.length + good.length === 0 && <li className="text-sm text-muted">No streaks yet. Log a few more nights.</li>}
+        </ul>
+      </Section>
+    </div>
+  );
+}
+
+/* ---------- Settings ---------- */
+function Settings({ contact, setContact, goal, setGoal, share, setShare }) {
+  return (
+    <div>
+      <h1 className="font-clock text-5xl">Settings</h1>
+
+      <Section title="Trusted contact">
+        <div className="rounded-2xl border border-line bg-surface p-4">
+          <p className="text-sm text-muted">We message this person if you get three red alerts in a row.</p>
+          <label className="mt-3 block text-sm font-semibold" htmlFor="c-name">Name</label>
+          <input id="c-name" value={contact.name} onChange={e => setContact({ ...contact, name: e.target.value })}
+            className="mt-1 w-full rounded-xl border border-line bg-raised px-3 py-2 text-ink"/>
+          <label className="mt-3 block text-sm font-semibold" htmlFor="c-phone">Phone or email</label>
+          <input id="c-phone" value={contact.reach} onChange={e => setContact({ ...contact, reach: e.target.value })}
+            className="mt-1 w-full rounded-xl border border-line bg-raised px-3 py-2 text-ink"/>
+        </div>
+      </Section>
+
+      <Section title="Sleep goal">
+        <div className="flex items-center justify-between rounded-2xl border border-line bg-surface p-4">
+          <span className="text-sm">Hours per night</span>
+          <div className="flex items-center gap-3">
+            <button onClick={() => setGoal(Math.max(5, goal - 0.5))} className="h-9 w-9 rounded-full bg-raised text-lg" aria-label="Decrease goal">−</button>
+            <span className="clock-num w-12 text-center font-clock text-3xl">{goal}</span>
+            <button onClick={() => setGoal(Math.min(10, goal + 0.5))} className="h-9 w-9 rounded-full bg-raised text-lg" aria-label="Increase goal">+</button>
+          </div>
+        </div>
+      </Section>
+
+      <Section title="Research">
+        <div className="flex items-center gap-4 rounded-2xl border border-line bg-surface p-4">
+          <p className="flex-1 text-sm">Share my sleep data with the campus sleep study. Your name is never included.</p>
+          <Toggle on={share} onChange={setShare} label="Share data with the sleep study"/>
+        </div>
+      </Section>
+    </div>
+  );
+}
+
+/* ---------- App shell ---------- */
+function App() {
+  const [tab, setTab] = useState('tonight');
+  const [now, setNow] = useState(new Date());
+  const [alarms, setAlarms] = useState([
+    { id: 1, type: 'wake', time: '07:30', days: ['Mon','Tue','Wed','Thu','Fri'], on: true },
+    { id: 2, type: 'wake', time: '09:00', days: ['Sat','Sun'], on: true },
+    { id: 3, type: 'bed',  time: '23:00', days: DAYS, on: true },
+  ]);
+  const [nights, setNights] = useState(seedNights);
+  const [alert, setAlert] = useState('yellow');
+  const [redStreak, setRedStreak] = useState(0);
+  const [sleeping, setSleeping] = useState(false);
+  const [lastSleep, setLastSleep] = useState(null);
+  const [alarmRangAt, setAlarmRangAt] = useState(null);
+  const [wakeResult, setWakeResult] = useState(null);
+  const [contact, setContact] = useState({ name: 'Mom', reach: '(701) 555-0142' });
+  const [goal, setGoal] = useState(8);
+  const [share, setShare] = useState(true);
+
+  useEffect(() => { const t = setInterval(() => setNow(new Date()), 15000); return () => clearInterval(t); }, []);
+
+  const onSleep = () => { setSleeping(true); setLastSleep(new Date()); setWakeResult(null); };
+  const onWake = () => {
+    const end = new Date();
+    // Demo: pretend the student slept 7.4 h if they tapped quickly
+    const realHours = (end - lastSleep) / 36e5;
+    const hours = realHours < 0.5 ? 7.4 : realHours;
+    const byAlarm = alarmRangAt && (end - alarmRangAt) <= 2 * 60 * 1000;
+    setNights([...nights.slice(1), { date: end, hours, ignored: 0, byAlarm: !!byAlarm }]);
+    setSleeping(false); setAlarmRangAt(null);
+    setWakeResult({ hours, byAlarm: !!byAlarm });
+    if (hours >= goal - 0.5) { setAlert('none'); setRedStreak(0); }
+  };
+
+  const sendAlert = (level) => {
+    setAlert(level);
+    if (level === 'red') setRedStreak(s => s + 1);
+    else setRedStreak(0);
+  };
+
+  const tabs = [['tonight','Tonight'],['alarms','Alarms'],['patterns','Patterns'],['settings','Settings']];
+
+  return (
+    <div className="mx-auto flex min-h-full max-w-xl flex-col">
+      <main className="flex-1 px-5 pb-40 pt-6">
+        {tab === 'tonight'  && <Tonight now={now} alert={alert} sleeping={sleeping} lastSleep={lastSleep} onSleep={onSleep} onWake={onWake} redStreak={redStreak} contact={contact} alarms={alarms} wakeResult={wakeResult}/>}
+        {tab === 'alarms'   && <Alarms alarms={alarms} setAlarms={setAlarms}/>}
+        {tab === 'patterns' && <Patterns nights={nights} goal={goal}/>}
+        {tab === 'settings' && <Settings contact={contact} setContact={setContact} goal={goal} setGoal={setGoal} share={share} setShare={setShare}/>}
+
+        <details className="mt-10 rounded-2xl border border-dashed border-line p-4 text-sm">
+          <summary className="cursor-pointer font-semibold text-muted">Prototype controls</summary>
+          <p className="mt-2 text-muted">These stand in for events the back end or device would send.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button onClick={() => setAlarmRangAt(new Date())} className="rounded-lg bg-raised px-3 py-2">Ring wake alarm now</button>
+            <button onClick={() => sendAlert('yellow')} className="rounded-lg bg-raised px-3 py-2">Send yellow alert</button>
+            <button onClick={() => sendAlert('red')} className="rounded-lg bg-raised px-3 py-2">Send red alert</button>
+            <button onClick={() => sendAlert('none')} className="rounded-lg bg-raised px-3 py-2">Clear alerts</button>
+          </div>
+          {alarmRangAt && <p className="mt-2 text-muted">Alarm rang at {fmtTime(alarmRangAt)}. Tap “I’m awake” within 2 minutes to log it as woken by alarm.</p>}
+        </details>
+      </main>
+
+      <nav className="fixed inset-x-0 bottom-0 border-t border-line bg-surface" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label="Main">
+        <ul className="mx-auto grid max-w-xl grid-cols-4">
+          {tabs.map(([k, l]) => (
+            <li key={k}>
+              <button onClick={() => setTab(k)} aria-current={tab === k ? 'page' : undefined}
+                className={`w-full py-4 text-sm font-semibold ${tab === k ? 'text-moon' : 'text-muted'}`}>
+                {l}
+                {k === 'tonight' && alert !== 'none' && <span className={`ml-1.5 inline-block h-2 w-2 rounded-full ${alert === 'red' ? 'bg-red' : 'bg-yellow'}`} aria-label={`${alert} alert`}/>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </nav>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
